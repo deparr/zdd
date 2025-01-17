@@ -48,18 +48,19 @@ uppercase_hex: bool,
 encoding: Encoding,
 groupsize: usize,
 length: ?usize,
-name: ?[]const u8,
+name: ?[]u8,
 offset: usize,
 offset_fmt: OffsetFmt,
 infile: ?[]const u8,
 outfile: ?[]const u8,
 it: std.process.ArgIterator,
+alloc: Allocator,
 
 const Format = enum { hex, bin, include, plain, reverse, words };
 
 const Encoding = enum { ascii, ebcdic };
 
-const OffsetFmt = enum { hex, dec };
+const OffsetFmt = enum { hex, dec, none };
 
 // todo -r reverse
 const Switch = enum {
@@ -120,7 +121,7 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
     var encoding: Args.Encoding = .ascii;
     var groupsize_o: ?usize = null;
     var length: ?usize = null;
-    var name: ?[]const u8 = null;
+    var name_o: ?[]const u8 = null;
     var offset: usize = 0;
     var offset_fmt: Args.OffsetFmt = .hex;
     var infile: ?[]const u8 = null;
@@ -172,32 +173,30 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
             },
             .@"-g", .@"-groupsize" => {
                 const group_num = nextArg(&it, "groupsize", process_name);
-                const group_p = std.fmt.parseInt(usize, group_num, 10) catch continue;
-                groupsize_o = group_p;
+                groupsize_o = std.fmt.parseInt(usize, group_num, 10) catch continue;
             },
             .@"-h", .@"-help" => {
                 help(process_name);
             },
             .@"-i", .@"-include" => {
                 format_o = .include;
+                offset_fmt = .none;
             },
             .@"-l", .@"-len" => {
                 const len_num = nextArg(&it, "length", process_name);
-                const len_p = std.fmt.parseInt(usize, len_num, 10) catch continue;
-                length = len_p;
+                length = std.fmt.parseInt(usize, len_num, 10) catch continue;
             },
-            .@"-L", .@"-language" => {
-            },
+            .@"-L", .@"-language" => {},
             .@"-n", .@"-name" => {
-                name = nextArg(&it, "name", process_name);
+                name_o = nextArg(&it, "name", process_name);
             },
             .@"-o" => {
                 const offset_num = nextArg(&it, "offet", process_name);
-                const offset_p = std.fmt.parseInt(usize, offset_num, 10) catch continue;
-                offset = offset_p;
+                offset = std.fmt.parseInt(usize, offset_num, 10) catch continue;
             },
             .@"-p", .@"-ps", .@"-postscript", .@"-plain" => {
                 format_o = .plain;
+                offset_fmt = .none;
             },
             .@"-r" => {
                 unreachable;
@@ -221,6 +220,12 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
     if (format != .plain and columns > max_columns)
         return ParseError.TooManyColumns;
 
+    const passed_name = name_o orelse if (infile) |path| std.fs.path.basename(path) else null;
+    var name: ?[]u8 = null;
+    if (passed_name) |n| {
+        name = try makeName(n, capitalize_name, alloc);
+    }
+
     return .{
         .format = format,
         .autoskip = autoskip,
@@ -236,6 +241,7 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
         .infile = infile,
         .outfile = outfile,
         .it = it,
+        .alloc = alloc,
     };
 }
 
@@ -246,6 +252,36 @@ fn nextArg(it: *std.process.ArgIterator, comptime field: []const u8, process_nam
     };
 
     return val;
+}
+
+fn makeName(passed: []const u8, capitalize: bool, alloc: Allocator) ![]u8 {
+    std.debug.assert(passed.len > 0);
+    var len = passed.len;
+    var start: usize = 0;
+    if (std.ascii.isDigit(passed[0])) {
+        len += 2;
+        start = 2;
+    }
+    var name_cpy = try alloc.alloc(u8, len);
+
+    if (std.ascii.isDigit(passed[0])) {
+        name_cpy[0] = '_';
+        name_cpy[1] = '_';
+    }
+
+    @memcpy(name_cpy[start..], passed);
+
+    for (0..name_cpy.len) |i| {
+        switch (name_cpy[i]) {
+            '_', 'A'...'Z', '0'...'9' => {},
+            'a'...'z' => if (capitalize) {
+                name_cpy[i] = name_cpy[i] + 0x20;
+            },
+            else => name_cpy[i] = '_',
+        }
+    }
+
+    return name_cpy;
 }
 
 fn defaultColumns(fmt: ?Args.Format) usize {
@@ -278,6 +314,9 @@ fn defaultGroupsize(fmt: ?Args.Format) usize {
 
 pub fn deinit(self: *Args) void {
     self.it.deinit();
+    if (self.name) |name| {
+        self.alloc.free(name);
+    }
 }
 
 pub fn dump(self: *Args) void {
@@ -311,5 +350,4 @@ pub fn dump(self: *Args) void {
         self.infile,
         self.outfile,
     });
-
 }
