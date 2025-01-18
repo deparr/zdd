@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const Args = @import("Args.zig");
 const dump = @import("dump.zig");
 
+// todo use arena allocator
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

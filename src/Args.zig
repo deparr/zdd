@@ -40,15 +40,16 @@ fn version() noreturn {
 
 const Args = @This();
 
+command: Command,
 format: Format,
 autoskip: bool,
 columns: usize,
 capitalize_name: bool,
-uppercase_hex: bool,
 encoding: Encoding,
 groupsize: usize,
 length: ?usize,
 name: ?[]u8,
+language: Language,
 offset: usize,
 offset_fmt: OffsetFmt,
 infile: ?[]const u8,
@@ -56,13 +57,12 @@ outfile: ?[]const u8,
 it: std.process.ArgIterator,
 alloc: Allocator,
 
-const Format = enum { hex, bin, include, plain, reverse, words };
-
+const Command = enum { grouped, include, plain, patch, words };
+const Format = enum { hex, bin, hex_upper };
 const Encoding = enum { ascii, ebcdic };
-
 const OffsetFmt = enum { hex, dec, none };
+const Language = enum { c, zig };
 
-// todo -r reverse
 const Switch = enum {
     @"-a",
     @"-autoskip",
@@ -109,19 +109,20 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
     const max_columns: usize = 256;
     var it = try std.process.argsWithAllocator(alloc);
 
-    const process_name = it.next() orelse "xxd";
+    const process_name = it.next() orelse "zdd";
 
     var end_of_args = false;
 
-    var format_o: ?Args.Format = null;
+    var command: Args.Command = .grouped;
+    var format: Args.Format = .hex;
     var autoskip: bool = false;
     var columns_o: ?usize = null;
     var capitalize_name: bool = false;
-    var uppercase_hex: bool = false;
     var encoding: Args.Encoding = .ascii;
     var groupsize_o: ?usize = null;
     var length: ?usize = null;
     var name_o: ?[]const u8 = null;
+    var language: Args.Language = .c;
     var offset: usize = 0;
     var offset_fmt: Args.OffsetFmt = .hex;
     var infile: ?[]const u8 = null;
@@ -152,7 +153,7 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
                 autoskip = true;
             },
             .@"-b", .@"-bits" => {
-                format_o = .bin;
+                format = .bin;
             },
             .@"-c", .@"-cols" => {
                 const cols = nextArg(&it, "columns", process_name);
@@ -169,7 +170,7 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
                 encoding = .ebcdic;
             },
             .@"-e" => {
-                format_o = .words;
+                command = .words;
             },
             .@"-g", .@"-groupsize" => {
                 const group_num = nextArg(&it, "groupsize", process_name);
@@ -179,14 +180,17 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
                 help(process_name);
             },
             .@"-i", .@"-include" => {
-                format_o = .include;
+                command = .include;
                 offset_fmt = .none;
             },
             .@"-l", .@"-len" => {
                 const len_num = nextArg(&it, "length", process_name);
                 length = std.fmt.parseInt(usize, len_num, 10) catch continue;
             },
-            .@"-L", .@"-language" => {},
+            .@"-L", .@"-language" => {
+                const given = nextArg(&it, "language", process_name);
+                language = std.meta.stringToEnum(Args.Language, given) orelse .c;
+            },
             .@"-n", .@"-name" => {
                 name_o = nextArg(&it, "name", process_name);
             },
@@ -195,14 +199,14 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
                 offset = std.fmt.parseInt(usize, offset_num, 10) catch continue;
             },
             .@"-p", .@"-ps", .@"-postscript", .@"-plain" => {
-                format_o = .plain;
+                command = .plain;
                 offset_fmt = .none;
             },
             .@"-r" => {
-                unreachable;
+                command = .patch;
             },
             .@"-u" => {
-                uppercase_hex = true;
+                if (format == .hex) format = .hex_upper;
             },
             .@"-v", .@"-version" => {
                 version();
@@ -210,32 +214,31 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
         }
     }
 
-    const format = format_o orelse .hex;
-    const groupsize = groupsize_o orelse defaultGroupsize(format);
-    const columns = columns_o orelse defaultColumns(format);
+    const groupsize = groupsize_o orelse defaultGroupsize(command, format);
+    const columns = columns_o orelse defaultColumns(command, format);
 
-    if (format == .words and @popCount(groupsize) > 1)
+    if (command == .words and @popCount(groupsize) > 1)
         return ParseError.InvalidWordGroupSize;
 
-    if (format != .plain and columns > max_columns)
+    if (command != .plain and columns > max_columns)
         return ParseError.TooManyColumns;
 
     const passed_name = name_o orelse if (infile) |path| std.fs.path.basename(path) else null;
     var name: ?[]u8 = null;
-    if (passed_name) |n| {
+    if (passed_name) |n|
         name = try makeName(n, capitalize_name, alloc);
-    }
 
     return .{
+        .command = command,
         .format = format,
         .autoskip = autoskip,
         .columns = columns,
         .capitalize_name = capitalize_name,
-        .uppercase_hex = uppercase_hex,
         .encoding = encoding,
         .groupsize = groupsize,
         .length = length,
         .name = name,
+        .language = language,
         .offset = offset,
         .offset_fmt = offset_fmt,
         .infile = infile,
@@ -284,32 +287,40 @@ fn makeName(passed: []const u8, capitalize: bool, alloc: Allocator) ![]u8 {
     return name_cpy;
 }
 
-fn defaultColumns(fmt: ?Args.Format) usize {
+fn defaultColumns(cmd: Args.Command, fmt: Args.Format) usize {
     const hex_def: usize = 16;
     const bit_def: usize = 6;
     const inc_def: usize = 12;
     const pst_def: usize = 30;
 
-    return if (fmt) |f| switch (f) {
-        .hex, .words => hex_def,
-        .bin => bit_def,
+    return switch (cmd) {
+        .grouped => switch (fmt) {
+            .hex, .hex_upper => hex_def,
+            .bin => bit_def,
+        },
         .include => inc_def,
+        .words => hex_def,
         .plain => pst_def,
-        .reverse => unreachable,
-    } else hex_def;
+        else => 0,
+    };
 }
 
-fn defaultGroupsize(fmt: ?Args.Format) usize {
+fn defaultGroupsize(cmd: Args.Command, fmt: Args.Format) usize {
     const hex_def: usize = 2;
     const bit_def: usize = 1;
     const end_def: usize = 4;
 
-    return if (fmt) |f| switch (f) {
-        .hex => hex_def,
-        .bin => bit_def,
-        .words => end_def,
+    return switch (cmd) {
+        .grouped => switch (fmt) {
+            .hex, .hex_upper => hex_def,
+            .bin => bit_def,
+        },
+        .words => switch (fmt) {
+            .hex, .hex_upper => end_def,
+            .bin => bit_def,
+        },
         else => 0,
-    } else hex_def;
+    };
 }
 
 pub fn deinit(self: *Args) void {
@@ -323,10 +334,10 @@ pub fn dump(self: *Args) void {
     std.debug.print(
         \\Args{{
         \\  command: {s}
+        \\  format: {s}
         \\  autoskip: {}
         \\  columns: {d}
         \\  capitalize_name: {}
-        \\  uppercase_hex: {}
         \\  encoding: {s}
         \\  groupsize: {d}
         \\  length: {?}
@@ -337,11 +348,11 @@ pub fn dump(self: *Args) void {
         \\}}
         \\
     , .{
+        @tagName(self.command),
         @tagName(self.format),
         self.autoskip,
         self.columns,
         self.capitalize_name,
-        self.uppercase_hex,
         @tagName(self.encoding),
         self.groupsize,
         self.length,
