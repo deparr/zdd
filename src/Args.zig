@@ -50,7 +50,7 @@ groupsize: usize,
 length: ?usize,
 name: ?[]u8,
 language: Language,
-offset: usize,
+offset: isize,
 offset_fmt: OffsetFmt,
 infile: ?[]const u8,
 outfile: ?[]const u8,
@@ -103,11 +103,13 @@ pub const ParseError = error{
     TooManyColumns,
     InvalidWordGroupSize,
     OutOfMemory,
+    InvalidPatchFormat,
 };
 
 pub fn parse(alloc: Allocator) Args.ParseError!Args {
     const max_columns: usize = 256;
     var it = try std.process.argsWithAllocator(alloc);
+    errdefer it.deinit();
 
     const process_name = it.next() orelse "zdd";
 
@@ -123,7 +125,7 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
     var length: ?usize = null;
     var name_o: ?[]const u8 = null;
     var language: Args.Language = .c;
-    var offset: usize = 0;
+    var offset: isize = 0;
     var offset_fmt: Args.OffsetFmt = .hex;
     var infile: ?[]const u8 = null;
     var outfile: ?[]const u8 = null;
@@ -164,7 +166,8 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
                 capitalize_name = true;
             },
             .@"-d" => {
-                offset_fmt = .dec;
+                if (offset_fmt != .none)
+                    offset_fmt = .dec;
             },
             .@"-E", .@"-EBCDIC" => {
                 encoding = .ebcdic;
@@ -185,7 +188,7 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
             },
             .@"-l", .@"-len" => {
                 const len_num = nextArg(&it, "length", process_name);
-                length = std.fmt.parseInt(usize, len_num, 10) catch continue;
+                length = std.fmt.parseUnsigned(usize, len_num, 10) catch continue;
             },
             .@"-L", .@"-language" => {
                 const given = nextArg(&it, "language", process_name);
@@ -196,7 +199,7 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
             },
             .@"-o" => {
                 const offset_num = nextArg(&it, "offet", process_name);
-                offset = std.fmt.parseInt(usize, offset_num, 10) catch continue;
+                offset = std.fmt.parseInt(isize, offset_num, 10) catch continue;
             },
             .@"-p", .@"-ps", .@"-postscript", .@"-plain" => {
                 command = .plain;
@@ -330,7 +333,7 @@ pub fn deinit(self: *Args) void {
     }
 }
 
-pub fn dump(self: *Args) void {
+pub fn dump(self: *const Args) void {
     std.debug.print(
         \\Args{{
         \\  command: {s}
