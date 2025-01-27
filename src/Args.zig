@@ -150,6 +150,9 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
             continue;
         };
 
+        // todo should we match xxd behavior on -r -[eb] or just take
+        // whichever comes later
+        // probably match
         switch (parsed) {
             .@"-a", .@"-autoskip" => {
                 autoskip = true;
@@ -225,6 +228,9 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
 
     if (command != .plain and columns > max_columns)
         return ParseError.TooManyColumns;
+
+    if (command == .patch and format == .bin)
+        return ParseError.InvalidPatchFormat;
 
     const passed_name = name_o orelse if (infile) |path| std.fs.path.basename(path) else null;
     var name: ?[]u8 = null;

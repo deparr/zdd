@@ -44,14 +44,14 @@ pub fn dump(opts: Args) !void {
 
         var nbytes_to_dump = nread;
 
-        if (target_len > 0 and offset + nread >= target_len) {
-            nbytes_to_dump = target_len - offset;
+        if (target_len > 0 and written + nread >= target_len) {
+            nbytes_to_dump = target_len - written;
             done = true;
         }
 
         switch (opts.offset_fmt) {
-            .hex => try outfile.print("{x:08}: ", .{offset}),
-            .dec => try outfile.print("{d:08}: ", .{offset}),
+            .hex => try writeHexOffset(&offset, outfile),
+            .dec => try writeDecOffset(offset, outfile),
             .none => {},
         }
 
@@ -60,7 +60,7 @@ pub fn dump(opts: Args) !void {
 
         try bw.flush();
 
-        offset += nread;
+        offset += @intCast(nread);
         written += nread;
     } else |err| {
         opts.alloc.free(buf);
@@ -75,6 +75,40 @@ pub fn dump(opts: Args) !void {
 
     if (outfile_handle) |f|
         f.close();
+}
+
+inline fn writeDecOffset(offset: isize, writer: anytype) !void {
+    var off = @abs(offset);
+    var digits: [18]u8 = undefined;
+    digits[16] = ':';
+    digits[17] = ' ';
+    var i: usize = 15;
+    while (off > 0) : (off /= 10) {
+        digits[i] = '0' + @as(u8, @intCast(off % 10));
+        if (i == 0)
+            return error.DecimalOffsetTooLarge;
+        i -= 1;
+    }
+    const target: usize = if (offset < 0) 9 else 8;
+    while (i >= target) : (i -= 1) {
+        digits[i] = '0';
+    }
+
+    if (offset < 0) {
+        digits[i] = '-';
+    } else i += 1;
+
+    _ = try writer.write(digits[i..]);
+}
+
+inline fn writeHexOffset(offset: *isize, writer: anytype) !void {
+    const bytes = std.mem.asBytes(offset);
+    // todo dont think this matches xxd
+    var i: usize = if (bytes[4] > 0) 1 else 5;
+    while (i <= bytes.len) : (i += 1) {
+        try writer.print("{x:02}", .{bytes[bytes.len - i]});
+    }
+    _ = try writer.write(": ");
 }
 
 fn writeHeader(opts: Args, writer: anytype) !void {
