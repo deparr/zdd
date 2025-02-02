@@ -7,7 +7,6 @@ pub fn dump(opts: Args) !void {
     //  assumes relative path
     //  needs to be seekable
 
-
     var infile_handle: ?std.fs.File = null;
     var outfile_handle: ?std.fs.File = null;
     var infile_reader = std.io.getStdIn().reader();
@@ -118,8 +117,20 @@ fn writeHeader(opts: Args, writer: anytype) !void {
     const name = opts.name.?;
 
     switch (opts.language) {
-        .c => try writer.print("unsigned char {s}[] = {{\n", .{name}),
-        .zig => try writer.print("const {s}: []const u8 = .{{\n", .{name}),
+        .c => {
+            if (opts.const_decl)
+                _ = try writer.write("const ");
+
+            try writer.print("unsigned char {s}[] = {{\n", .{name});
+        },
+        .zig => {
+            if (opts.const_decl)
+                _ = try writer.write("const")
+            else
+                _ = try writer.write("var");
+
+            try writer.print(" {s}: []const u8 = .{{\n", .{name});
+        },
     }
 }
 
@@ -128,10 +139,16 @@ fn writeFooter(opts: Args, len: usize, writer: anytype) !void {
         return;
 
     const name = opts.name.?;
+    _ = try writer.write("};\n");
 
     switch (opts.language) {
-        .c => try writer.print("}};\nunsigned int {s}_len = {d};\n", .{ name, len }),
-        .zig => try writer.print("}};\n", .{}),
+        .c => {
+            if (opts.const_decl)
+                _ = try writer.write("const ");
+
+            try writer.print("unsigned int {s}_len = {d};\n", .{ name, len });
+        },
+        else => {},
     }
 }
 

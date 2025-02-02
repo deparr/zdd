@@ -45,6 +45,7 @@ format: Format,
 autoskip: bool,
 columns: usize,
 capitalize_name: bool,
+const_decl: bool,
 encoding: Encoding,
 groupsize: usize,
 length: ?usize,
@@ -70,6 +71,7 @@ const Switch = enum {
     @"-bits",
     @"-c",
     @"-cols",
+    @"-const",
     @"-C",
     @"-d",
     @"-capitalize",
@@ -120,6 +122,7 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
     var autoskip: bool = false;
     var columns_o: ?usize = null;
     var capitalize_name: bool = false;
+    var const_decl: bool = false;
     var encoding: Args.Encoding = .ascii;
     var groupsize_o: ?usize = null;
     var length: ?usize = null;
@@ -164,6 +167,9 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
                 const cols = nextArg(&it, "columns", process_name);
                 const cols_num = std.fmt.parseInt(u9, cols, 10) catch continue;
                 columns_o = cols_num;
+            },
+            .@"-const" => {
+                const_decl = true;
             },
             .@"-C", .@"-capitalize" => {
                 capitalize_name = true;
@@ -243,6 +249,7 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
         .autoskip = autoskip,
         .columns = columns,
         .capitalize_name = capitalize_name,
+        .const_decl = const_decl,
         .encoding = encoding,
         .groupsize = groupsize,
         .length = length,
