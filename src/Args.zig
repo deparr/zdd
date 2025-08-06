@@ -10,25 +10,26 @@ pub fn help(process_name: []const u8) noreturn {
         \\    or
         \\       {s} -r [-s [-]offset] [-c cols] [-ps] [infile [outfile]]
         \\Options:
-        \\    -a          toggle autoskip: A single '*' replaces nul-lines. Default off.
-        \\    -b          binary digit dump (incompatible with -ps,-i,-r). Default hex.
-        \\    -C          capitalize variable names in C include file style (-i).
-        \\    -c cols     format <cols> octets per line. Default 16 (-i: 12, -ps: 30).
-        \\    -E          show characters in EBCDIC. Default ASCII.
-        \\    -e          little-endian dump (incompatible with -ps,-i,-r).
-        \\    -g bytes    number of octets per group in normal output. Default 2 (-e: 4).
-        \\    -h          print this summary.
-        \\    -i          output in C include file style.
-        \\    -l len      stop after <len> octets.
-        \\    -n name     set the variable name used in C include output (-i).
-        \\    -o off      add <off> to the displayed file position.
-        \\    -ps         output in postscript plain hexdump style.
-        \\    -r          reverse operation: convert (or patch) hexdump into binary.
-        \\    -r -s off   revert with <off> added to file positions found in hexdump.
-        \\    -d          show offset in decimal instead of hex.
+        \\    -a             toggle autoskip: A single '*' replaces nul-lines. Default off.
+        \\    -b             binary digit dump (incompatible with -ps,-i,-r). Default hex.
+        \\    -C             capitalize variable names in C include file style (-i).
+        \\    -color [when]  differentiate bytes by color in the output (always, never, auto).
+        \\    -c cols        format <cols> octets per line. Default 16 (-i: 12, -ps: 30).
+        \\    -E             show characters in EBCDIC. Default ASCII.
+        \\    -e             little-endian dump (incompatible with -ps,-i,-r).
+        \\    -g bytes       number of octets per group in normal output. Default 2 (-e: 4).
+        \\    -h             print this summary.
+        \\    -i             output in C include file style.
+        \\    -l len         stop after <len> octets.
+        \\    -n name        set the variable name used in C include output (-i).
+        \\    -o off         add <off> to the displayed file position.
+        \\    -ps            output in postscript plain hexdump style.
+        \\    -r             reverse operation: convert (or patch) hexdump into binary.
+        \\    -r -s off      revert with <off> added to file positions found in hexdump.
+        \\    -d             show offset in decimal instead of hex.
         \\    -s [+][-]seek  start at <seek> bytes abs. (or +: rel.) infile offset.
-        \\    -u          use upper case hex letters.
-        \\    -v          show version: "{s}".
+        \\    -u             use upper case hex letters.
+        \\    -v             show version: "{s}".
     , .{ process_name, process_name, version_str });
     std.process.exit(1);
 }
@@ -43,6 +44,7 @@ const Args = @This();
 command: Command,
 format: Format,
 autoskip: bool,
+colors: Colors,
 columns: usize,
 capitalize_name: bool,
 const_decl: bool,
@@ -63,6 +65,33 @@ const Format = enum { hex, bin, hex_upper };
 const Encoding = enum { ascii, ebcdic };
 const OffsetFmt = enum { hex, dec, none };
 const Language = enum { c, zig };
+const Colors = struct {
+    reset: []const u8,
+    text: []const u8,
+    control: []const u8,
+
+    const none: Colors = .{
+        .reset = "",
+        .text = "",
+        .control = "",
+    };
+
+    const default: Colors = .{
+        .text = Colors.green,
+        .control = Colors.red,
+        .reset = Colors._reset,
+    };
+
+    const _reset = "\x1b[m";
+    const red = "\x1b[31m";
+    const green = "\x1b[32m";
+    const yellow = "\x1b[33m";
+    const blue = "\x1b[34m";
+    const purple = "\x1b[35m";
+    const cyan = "\x1b[36m";
+    const gray = "\x1b[90m";
+    const fg = "\x1b[37m";
+};
 
 const Switch = enum {
     @"-a",
@@ -70,6 +99,7 @@ const Switch = enum {
     @"-b",
     @"-bits",
     @"-c",
+    @"-color",
     @"-cols",
     @"-const",
     @"-C",
@@ -99,6 +129,11 @@ const Switch = enum {
     @"-u",
     @"-v",
     @"-version",
+    const When = enum {
+        never,
+        always,
+        // auto
+    };
 };
 
 pub const ParseError = error{
@@ -120,6 +155,7 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
     var command: Args.Command = .grouped;
     var format: Args.Format = .hex;
     var autoskip: bool = false;
+    var color: Switch.When = .always;
     var columns_o: ?usize = null;
     var capitalize_name: bool = false;
     var const_decl: bool = false;
@@ -162,6 +198,11 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
             },
             .@"-b", .@"-bits" => {
                 format = .bin;
+            },
+            .@"-color" => {
+                const when_str = nextArg(&it, "color", process_name);
+                const when = std.meta.stringToEnum(Switch.When, when_str) orelse .never;
+                color = when;
             },
             .@"-c", .@"-cols" => {
                 const cols = nextArg(&it, "columns", process_name);
@@ -243,10 +284,22 @@ pub fn parse(alloc: Allocator) Args.ParseError!Args {
     if (passed_name) |n|
         name = try makeName(n, capitalize_name, alloc);
 
+    var colors = switch(color) {
+        .never => Args.Colors.none,
+        .always => Args.Colors.default,
+    };
+    // never write colors when not printing to stdout
+    // this still isn't great though, should also check if
+    // stdout is a tty
+    if (outfile != null) {
+        colors = Args.Colors.none;
+    }
+
     return .{
         .command = command,
         .format = format,
         .autoskip = autoskip,
+        .colors = colors,
         .columns = columns,
         .capitalize_name = capitalize_name,
         .const_decl = const_decl,

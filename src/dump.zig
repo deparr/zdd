@@ -1,6 +1,13 @@
 const std = @import("std");
 const Args = @import("Args.zig");
 
+const CharType = enum {
+    text,
+    control,
+    other,
+    none,
+};
+
 pub fn dump(opts: Args) !void {
     // TODO better io
     //  move this out of dump()
@@ -167,14 +174,37 @@ fn groupedWriteBytes(opts: Args, bytes: []u8, writer: anytype) !void {
     const chars_per_octet: usize = if (opts.format == .bin) 8 else 2;
     var target_size =
         if (groupsize > 0)
-        opts.columns * chars_per_octet + (opts.columns / groupsize) + 1
-    else
-        opts.columns * chars_per_octet;
+            opts.columns * chars_per_octet + (opts.columns / groupsize) + 1
+        else
+            opts.columns * chars_per_octet;
     if (opts.columns % groupsize != 0)
         target_size += 1;
     var written: usize = 0;
 
+    var prev_byte_type: CharType = .none;
     for (bytes, 1..) |byte, i| {
+        var current_byte_type: CharType = undefined;
+        defer prev_byte_type = current_byte_type;
+        const color = blk: switch (byte) {
+            0...31, 127 => {
+                current_byte_type = .control;
+                break :blk opts.colors.control;
+            },
+            ' '...'~' => {
+                current_byte_type = .text;
+                break :blk opts.colors.text;
+            },
+            else => {
+                current_byte_type = .other;
+                break :blk "";
+            },
+        };
+
+        if (current_byte_type != prev_byte_type) {
+            if (i != 1) try writer.writeAll(opts.colors.reset);
+            try writer.writeAll(color);
+        }
+
         switch (opts.format) {
             .hex_upper => try writer.print("{X:02}", .{byte}),
             .hex => try writer.print("{x:02}", .{byte}),
@@ -188,6 +218,7 @@ fn groupedWriteBytes(opts: Args, bytes: []u8, writer: anytype) !void {
         }
     }
 
+    try writer.writeAll(opts.colors.reset);
     try writer.writeByteNTimes(' ', target_size - written);
 }
 
@@ -251,13 +282,32 @@ fn writeChars(opts: Args, bytes: []u8, writer: anytype) !void {
         else => {},
     }
 
+    var prev_byte_type: CharType = .none;
     for (bytes) |byte| {
         var to_print: u8 = '.';
+        var color: []const u8 = "";
+        var current_byte_type: CharType = .other;
+        defer prev_byte_type = current_byte_type;
         switch (byte) {
-            ' '...'~' => to_print = byte,
+            ' '...'~' => {
+                to_print = byte;
+                color = opts.colors.text;
+                current_byte_type = .text;
+            },
             else => {},
+        }
+
+        if (current_byte_type != prev_byte_type) {
+            try writer.writeAll(
+                if (current_byte_type == .text)
+                    opts.colors.text
+                else
+                    opts.colors.reset,
+            );
         }
         try writer.writeByte(to_print);
     }
+
+    try writer.writeAll(opts.colors.reset);
     try writer.writeByte('\n');
 }
